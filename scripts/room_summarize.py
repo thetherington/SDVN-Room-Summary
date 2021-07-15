@@ -1,6 +1,7 @@
 import copy
 import datetime
 import json
+import urllib.parse
 from threading import Thread
 
 import requests
@@ -12,12 +13,29 @@ class summary_builder:
         self.annotate = None
         self.url = None
         self.insite = None
+        self.time_lookup = "15m"
 
         for key, value in kwargs.items():
 
             if key == "insite" and value:
+
                 self.insite = value
-                self.url = "http://{}:9200/log-metric-poller-ipg-*/_search".format(value)
+
+                self.url_ipg = "http://%s:9200/%s/_search/" % (
+                    self.insite,
+                    urllib.parse.quote(
+                        "<log-metric-p-ipg-{now/d}>,<log-metric-p-ipg-{now/d-1d}>",
+                        safe="",
+                    ),
+                )
+
+                self.url_magnum = "http://%s:9200/%s/_search/" % (
+                    self.insite,
+                    urllib.parse.quote(
+                        "<log-metric-p-magnum-{now/d}>,<log-metric-p-magnum-{now/d-1d}>",
+                        safe="",
+                    ),
+                )
 
             if key == "annotate" and isinstance(value, dict):
 
@@ -28,45 +46,35 @@ class summary_builder:
             if key == "annotate_db" and isinstance(value, dict):
                 self.annotate = value
 
+            if key == "time_lookup" and value:
+                self.time_lookup = value
+
         self.ipg_link_query = {
             "size": 0,
             "query": {
                 "bool": {
                     "must": [
-                        {"match_phrase": {"poller.ipg.linkmon.b_fault": {"query": True}}},
-                        {"range": {"@timestamp": {"from": "now-1m", "to": "now"}}},
+                        {"range": {"@timestamp": {"from": "now-{}".format(self.time_lookup), "to": "now"}}},
+                        {"match_phrase": {"event.dataset": "ipg.linkmon"}},
+                        {"match_phrase": {"ipg.linkmon.s_type": "port"}},
+                        {"match_phrase": {"ipg.linkmon.b_fault": "true"}},
                     ]
                 }
             },
             "aggs": {
                 "PCR": {
-                    "terms": {
-                        "field": "poller.ipg.linkmon.s_pcr",
-                        "size": 50,
-                        "order": {"_term": "desc"},
-                    },
+                    "terms": {"field": "ipg.linkmon.s_pcr", "size": 50, "order": {"_term": "desc"}},
                     "aggs": {
                         "DEVICE": {
-                            "terms": {
-                                "field": "poller.ipg.linkmon.s_device_name",
-                                "size": 1000,
-                                "order": {"_term": "desc"},
-                            },
+                            "terms": {"field": "ipg.linkmon.s_device_name", "size": 1000, "order": {"_term": "desc"}},
                             "aggs": {
                                 "LINK": {
-                                    "terms": {
-                                        "field": "poller.ipg.linkmon.i_link",
-                                        "size": 10,
-                                        "order": {"_term": "desc"},
-                                    },
+                                    "terms": {"field": "ipg.linkmon.i_link", "size": 10, "order": {"_term": "desc"}},
                                     "aggs": {
                                         "ISSUES": {
                                             "top_hits": {
-                                                "docvalue_fields": [
-                                                    "poller.ipg.linkmon.as_fault_list",
-                                                ],
-                                                "_source": "poller.ipg.statusmon.i_num_issues",
                                                 "size": 1,
+                                                "docvalue_fields": ["ipg.linkmon.as_fault_list"],
                                                 "_source": False,
                                                 "sort": [{"@timestamp": {"order": "desc"}}],
                                             }
@@ -85,35 +93,29 @@ class summary_builder:
             "query": {
                 "bool": {
                     "must": [
-                        {"exists": {"field": "poller.ipg.statusmon.s_issues"}},
-                        {"range": {"@timestamp": {"from": "now-7m", "to": "now"}}},
+                        {"range": {"@timestamp": {"from": "now-{}".format(self.time_lookup), "to": "now"}}},
+                        {"match_phrase": {"event.dataset": "ipg.statusmon"}},
+                        {"match_phrase": {"ipg.statusmon.s_type": "status"}},
+                        {"exists": {"field": "ipg.statusmon.as_issue_list"}},
                     ]
                 }
             },
             "aggs": {
                 "PCR": {
-                    "terms": {
-                        "field": "poller.ipg.statusmon.s_pcr",
-                        "size": 50,
-                        "order": {"_term": "desc"},
-                    },
+                    "terms": {"field": "ipg.statusmon.s_pcr", "size": 50},
                     "aggs": {
                         "DEVICE": {
-                            "terms": {
-                                "field": "poller.ipg.statusmon.s_device_name",
-                                "size": 1000,
-                                "order": {"_term": "desc"},
-                            },
+                            "terms": {"field": "ipg.statusmon.s_device_name", "size": 10, "order": {"_term": "desc"}},
                             "aggs": {
                                 "ISSUES": {
                                     "top_hits": {
-                                        "docvalue_fields": [
-                                            "poller.ipg.statusmon.i_num_issues",
-                                            "poller.ipg.statusmon.i_severity_code",
-                                            "poller.ipg.statusmon.s_status_descr",
-                                            "poller.ipg.statusmon.s_status_color",
-                                        ],
                                         "size": 1,
+                                        "docvalue_fields": [
+                                            "ipg.statusmon.i_num_issues",
+                                            "ipg.statusmon.i_severity_code",
+                                            "ipg.statusmon.s_status_descr",
+                                            "ipg.statusmon.s_status_color",
+                                        ],
                                         "_source": False,
                                         "sort": [{"@timestamp": {"order": "desc"}}],
                                     }
@@ -127,11 +129,18 @@ class summary_builder:
 
         self.salvo_query = {
             "size": 0,
-            "query": {"range": {"poller.salvo.salvo_mon.t_time": {"from": "now-0d/d", "to": "now/d"}}},
+            "query": {
+                "bool": {
+                    "must": [
+                        {"range": {"magnum.salvo.t_time": {"from": "now-0d/d", "to": "now/d"}}},
+                        {"match_phrase": {"event.dataset": "magnum.salvo"}},
+                    ]
+                }
+            },
             "aggs": {
                 "ROOM": {
-                    "terms": {"field": "poller.salvo.salvo_mon.s_pcr", "size": 100},
-                    "aggs": {"RESULTS": {"terms": {"field": "poller.salvo.salvo_mon.s_result", "size": 10}}},
+                    "terms": {"field": "magnum.salvo.s_pcr", "size": 100},
+                    "aggs": {"RESULTS": {"terms": {"field": "magnum.salvo.s_result", "size": 10}}},
                 }
             },
         }
@@ -141,19 +150,20 @@ class summary_builder:
             "query": {
                 "bool": {
                     "must": [
-                        {"range": {"@timestamp": {"from": "now-5m", "to": "now"}}},
-                        {"match_phrase": {"poller.magnum.api.s_type": {"query": "summary"}}},
+                        {"range": {"@timestamp": {"from": "now-{}".format(self.time_lookup), "to": "now"}}},
+                        {"match_phrase": {"event.dataset": "magnum.service"}},
+                        {"match_phrase": {"magnum.service.s_type": "overall"}},
                     ]
                 }
             },
             "aggs": {
                 "server": {
-                    "terms": {"field": "host", "size": 50},
+                    "terms": {"field": "host.name", "size": 100},
                     "aggs": {
                         "issues": {
                             "top_hits": {
                                 "size": 1,
-                                "docvalue_fields": ["poller.magnum.api.i_issues"],
+                                "docvalue_fields": ["magnum.service.i_num_failed"],
                                 "_source": False,
                                 "sort": [{"@timestamp": {"order": "desc"}}],
                             }
@@ -168,26 +178,22 @@ class summary_builder:
             "query": {
                 "bool": {
                     "must": [
-                        {"range": {"@timestamp": {"from": "now-5m", "to": "now"}}},
-                        {"match_phrase": {"poller.magnum.api.s_type": {"query": "redundancy_mon"}}},
+                        {"range": {"@timestamp": {"from": "now-{}".format(self.time_lookup), "to": "now"}}},
+                        {"match_phrase": {"event.dataset": "magnum.redundancy"}},
                     ]
                 }
             },
             "aggs": {
                 "room": {
-                    "terms": {"field": "host", "size": 100},
+                    "terms": {"field": "magnum.redundancy.s_system", "size": 100},
                     "aggs": {
                         "server": {
-                            "terms": {
-                                "field": "poller.magnum.api.s_server",
-                                "size": 10,
-                                "order": {"_term": "asc"},
-                            },
+                            "terms": {"field": "magnum.redundancy.s_host", "size": 10, "order": {"_term": "asc"}},
                             "aggs": {
                                 "description": {
                                     "top_hits": {
-                                        "docvalue_fields": ["poller.magnum.api.s_state_descr"],
                                         "size": 1,
+                                        "docvalue_fields": ["magnum.redundancy.s_status"],
                                         "_source": False,
                                         "sort": [{"@timestamp": {"order": "desc"}}],
                                     }
@@ -246,11 +252,11 @@ class summary_builder:
                         self.field_template[room]["as_components"].append(item)
 
                         _agg = copy.deepcopy(self.ipg_status_query["aggs"]["PCR"])
-                        _agg["terms"]["field"] = "poller.ipg.statusmon.s_{}".format(item.lower())
+                        _agg["terms"]["field"] = "ipg.statusmon.s_{}".format(item.lower())
                         status_component_queries.append({item: _agg})
 
                         _agg = copy.deepcopy(self.ipg_link_query["aggs"]["PCR"])
-                        _agg["terms"]["field"] = "poller.ipg.linkmon.s_{}".format(item.lower())
+                        _agg["terms"]["field"] = "ipg.linkmon.s_{}".format(item.lower())
                         link_component_queries.append({item: _agg})
 
             for query in status_component_queries:
@@ -263,184 +269,180 @@ class summary_builder:
 
         try:
 
-            response = requests.get(url, data=json.dumps(query), timeout=30.0)
+            header = {"Content-Type": "application/json"}
+            params = {"ignore_unavailable": "true"}
+
+            response = requests.get(url, data=json.dumps(query), headers=header, params=params, timeout=30.0)
+            response.close()
 
             return json.loads(response.text)
 
         except Exception as e:
 
             with open("summary_builder", "a+") as f:
-                f.write(str(datetime.datetime.now()) + " --- " + "magnum_cache_builder" + "\t" + str(e) + "\r\n")
+                f.write(str(datetime.datetime.now()) + " --- " + "fetch_method" + "\t" + str(e) + "\r\n")
 
             return None
 
     def ipg_process_statusmon(self, fields):
 
-        results = self.fetch(self.url, self.ipg_status_query)
+        results = self.fetch(self.url_ipg, self.ipg_status_query)
 
-        if isinstance(results, dict):
-            if "aggregations" in results.keys():
+        try:
+            # group agg query result objects (PCR, SWITCHER...)
+            for group_key, agg in results["aggregations"].items():
 
-                # group agg query result objects (PCR, SWITCHER...)
-                for group_key, agg in results["aggregations"].items():
+                # terms of objects found in a group
+                for bucket in agg["buckets"]:
 
-                    # terms of objects found in a group
-                    for bucket in agg["buckets"]:
+                    # term name (PCR room name, or switcher name)
+                    bucket_key = bucket["key"]
 
-                        # term name (PCR room name, or switcher name)
-                        bucket_key = bucket["key"]
+                    # IPG objects in a group
+                    for edge in bucket["DEVICE"]["buckets"]:
 
-                        # IPG objects in a group
-                        for edge in bucket["DEVICE"]["buckets"]:
+                        # test if the issues top hits is in the edge object
+                        try:
 
-                            # IPG name
-                            edge_key = edge["key"]
+                            top_hit = edge["ISSUES"]["hits"]["hits"][-1]["fields"]
 
-                            # test if the issues top hits is in the edge object
-                            if "ISSUES" in edge.keys():
+                            number_issues = top_hit["ipg.statusmon.i_num_issues"][-1]
+                            severity_code = top_hit["ipg.statusmon.i_severity_code"][-1]
+                            severity_color = top_hit["ipg.statusmon.s_status_color"][-1]
+                            severity_descr = top_hit["ipg.statusmon.s_status_descr"][-1]
 
-                                number_issues = edge["ISSUES"]["hits"]["hits"][-1]["fields"]["poller.ipg.statusmon.i_num_issues"][
-                                    -1
-                                ]
+                            # scan through each of the document template to find the room
+                            for _, values in fields.items():
 
-                                severity_code = edge["ISSUES"]["hits"]["hits"][-1]["fields"][
-                                    "poller.ipg.statusmon.i_severity_code"
-                                ][-1]
+                                if values["s_{}".format(group_key.lower())] == bucket_key:
 
-                                severity_color = edge["ISSUES"]["hits"]["hits"][-1]["fields"][
-                                    "poller.ipg.statusmon.s_status_color"
-                                ][-1]
+                                    values["i_{}_status_issues".format(group_key.lower())] += number_issues
 
-                                severity_descr = edge["ISSUES"]["hits"]["hits"][-1]["fields"][
-                                    "poller.ipg.statusmon.s_status_descr"
-                                ][-1]
+                                    # Test if the document severity code is greater then the stored
+                                    # severity. if greater then update the fields with the higher severity
+                                    if severity_code > values["i_{}_status_code".format(group_key.lower())]:
 
-                                # scan through each of the document template to find the room
-                                for _, values in fields.items():
+                                        values["i_{}_status_code".format(group_key.lower())] = severity_code
+                                        values["s_{}_status_descr".format(group_key.lower())] = severity_descr
+                                        values["s_{}_status_color".format(group_key.lower())] = severity_color
 
-                                    if values["s_{}".format(group_key.lower())] == bucket_key:
+                        except Exception as e:
+                            print(e)
+                            continue
 
-                                        values["i_{}_status_issues".format(group_key.lower())] += number_issues
-
-                                        # Test if the document severity code is greater then the stored
-                                        # severity. if greater then update the fields with the higher severity
-                                        if severity_code > values["i_{}_status_code".format(group_key.lower())]:
-
-                                            values["i_{}_status_code".format(group_key.lower())] = severity_code
-
-                                            values["s_{}_status_descr".format(group_key.lower())] = severity_descr
-
-                                            values["s_{}_status_color".format(group_key.lower())] = severity_color
+        except Exception as e:
+            print(e)
 
         return fields
 
     def ipg_process_linkmon(self, fields):
 
-        results = self.fetch(self.url, self.ipg_link_query)
+        results = self.fetch(self.url_ipg, self.ipg_link_query)
 
-        if isinstance(results, dict):
-            if "aggregations" in results.keys():
+        try:
 
-                # group agg query result objects (PCR, SWITCHER...)
-                for group_key, agg in results["aggregations"].items():
+            # group agg query result objects (PCR, SWITCHER...)
+            for group_key, agg in results["aggregations"].items():
 
-                    # terms of objects found in a group
-                    for bucket in agg["buckets"]:
+                # terms of objects found in a group
+                for bucket in agg["buckets"]:
 
-                        # term name (PCR room name, or switcher name)
-                        bucket_key = bucket["key"]
+                    # term name (PCR room name, or switcher name)
+                    bucket_key = bucket["key"]
 
-                        # IPG objects in a group
-                        for edge in bucket["DEVICE"]["buckets"]:
+                    # IPG objects in a group
+                    for edge in bucket["DEVICE"]["buckets"]:
+                        for link in edge["LINK"]["buckets"]:
 
-                            # IPG name
-                            edge_key = edge["key"]
+                            try:
 
-                            for link in edge["LINK"]["buckets"]:
+                                number_issues = len(link["ISSUES"]["hits"]["hits"][-1]["fields"]["ipg.linkmon.as_fault_list"])
 
-                                if "ISSUES" in link.keys():
+                                for _, values in fields.items():
 
-                                    number_issues = len(
-                                        link["ISSUES"]["hits"]["hits"][-1]["fields"]["poller.ipg.linkmon.as_fault_list"]
-                                    )
+                                    if values["s_{}".format(group_key.lower())] == bucket_key:
 
-                                    for _, values in fields.items():
+                                        values["i_{}_linkmon_issues".format(group_key.lower())] += number_issues
 
-                                        if values["s_{}".format(group_key.lower())] == bucket_key:
+                            except Exception as e:
+                                print(e)
+                                continue
 
-                                            values["i_{}_linkmon_issues".format(group_key.lower())] += number_issues
+        except Exception as e:
+            print(e)
 
         return fields
 
     def process_salvo(self, fields):
 
-        results = self.fetch("http://{}:9200/log-metric-poller-salvo-*/_search".format(self.insite), self.salvo_query)
+        results = self.fetch(self.url_magnum, self.salvo_query)
 
-        if isinstance(results, dict):
-            if "aggregations" in results.keys():
+        try:
 
-                for room in results["aggregations"]["ROOM"]["buckets"]:
+            for room in results["aggregations"]["ROOM"]["buckets"]:
 
-                    pcr = room["key"]
+                pcr = room["key"]
 
-                    for result in room["RESULTS"]["buckets"]:
+                for result in room["RESULTS"]["buckets"]:
 
-                        if pcr in fields.keys():
-                            fields[pcr]["i_pcr_salvo_{}".format(result["key"])] += result["doc_count"]
+                    if pcr in fields.keys():
+                        fields[pcr]["i_pcr_salvo_{}".format(result["key"])] += result["doc_count"]
+
+        except Exception as e:
+            print(e)
 
     def process_magnum_status(self, fields):
 
-        results = self.fetch(
-            "http://{}:9200/log-metric-poller-magnum-*/_search".format(self.insite),
-            self.magnum_status_query,
-        )
+        results = self.fetch(self.url_magnum, self.magnum_status_query)
 
-        if isinstance(results, dict):
-            if "aggregations" in results.keys():
+        try:
 
-                for server in results["aggregations"]["server"]["buckets"]:
+            for server in results["aggregations"]["server"]["buckets"]:
 
-                    magnum_name = server["key"]
-                    num_issues = 0
+                magnum_name = server["key"]
+                num_issues = 0
 
-                    if "issues" in server.keys():
+                if "issues" in server.keys():
 
-                        for hit in server["issues"]["hits"]["hits"]:
-                            num_issues += hit["fields"]["poller.magnum.api.i_issues"][-1]
+                    for hit in server["issues"]["hits"]["hits"]:
+                        num_issues += hit["fields"]["magnum.service.i_num_failed"][-1]
 
-                    for room, items in fields.items():
+                for room, items in fields.items():
 
-                        if room in magnum_name:
-                            items["i_pcr_magnum_issues"] += num_issues
+                    if room in magnum_name:
+                        items["i_pcr_magnum_issues"] += num_issues
+
+        except Exception as e:
+            print(e)
 
     def process_magnum_redundancy(self, fields):
 
-        results = self.fetch(
-            "http://{}:9200/log-metric-poller-magnum-*/_search".format(self.insite),
-            self.magnum_redundancy_query,
-        )
+        results = self.fetch(self.url_magnum, self.magnum_redundancy_query)
 
-        if isinstance(results, dict):
-            if "aggregations" in results.keys():
+        try:
 
-                for room in results["aggregations"]["room"]["buckets"]:
+            for room_collection in results["aggregations"]["room"]["buckets"]:
 
-                    room_name = room["key"]
+                for server in room_collection["server"]["buckets"]:
 
-                    if "server" in room.keys():
-                        for server in room["server"]["buckets"]:
+                    server_name = server["key"]
+                    server_key = server["key"][-1:]
 
-                            server_name = server["key"]
-                            server_key = server["key"][-1:]
+                    try:
 
-                            if "description" in server.keys():
-                                for hit in server["description"]["hits"]["hits"]:
-                                    server_desc = hit["fields"]["poller.magnum.api.s_state_descr"][-1]
+                        server_desc = server["description"]["hits"]["hits"][-1]["fields"]["magnum.redundancy.s_status"][-1]
 
-                            for room, items in fields.items():
+                        for room, items in fields.items():
 
-                                if room in server_name:
-                                    items["s_pcr_magnum_{}_redundancy".format(server_key.lower())] = server_desc
+                            if room in server_name:
+                                items["s_pcr_magnum_{}_redundancy".format(server_key.lower())] = server_desc
+
+                    except Exception as e:
+                        print(e)
+                        continue
+
+        except Exception as e:
+            print(e)
 
     def process_summary(self):
 
@@ -448,11 +450,15 @@ class summary_builder:
 
         threads = []
 
-        threads.append(Thread(target=self.ipg_process_statusmon, args=(fields,)))
-        threads.append(Thread(target=self.ipg_process_linkmon, args=(fields,)))
-        threads.append(Thread(target=self.process_salvo, args=(fields,)))
-        threads.append(Thread(target=self.process_magnum_status, args=(fields,)))
-        threads.append(Thread(target=self.process_magnum_redundancy, args=(fields,)))
+        func_list = [
+            self.ipg_process_statusmon,
+            self.ipg_process_linkmon,
+            self.process_salvo,
+            self.process_magnum_status,
+            self.process_magnum_redundancy,
+        ]
+
+        threads.extend([Thread(target=func, args=(fields,)) for func in func_list])
 
         for x in threads:
             x.start()
@@ -494,15 +500,14 @@ class summary_builder:
 def main():
 
     params = {
-        "insite": "172.16.205.201",
+        "insite": "172.16.205.77",
+        "time_lookup": "24h",
         "annotate": {"module": "ThirtyRock_PROD_edge_def", "dict": "ROOM_COLLECTION"},
     }
 
     summary = summary_builder(**params)
 
     print(json.dumps(summary.process_summary(), indent=2))
-
-    summary.process_magnum_redundancy({})
 
 
 if __name__ == "__main__":
