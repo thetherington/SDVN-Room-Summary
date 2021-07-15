@@ -127,17 +127,11 @@ class summary_builder:
 
         self.salvo_query = {
             "size": 0,
-            "query": {
-                "range": {"poller.salvo.salvo_mon.t_time": {"from": "now-0d/d", "to": "now/d"}}
-            },
+            "query": {"range": {"poller.salvo.salvo_mon.t_time": {"from": "now-0d/d", "to": "now/d"}}},
             "aggs": {
                 "ROOM": {
                     "terms": {"field": "poller.salvo.salvo_mon.s_pcr", "size": 100},
-                    "aggs": {
-                        "RESULTS": {
-                            "terms": {"field": "poller.salvo.salvo_mon.s_result", "size": 10}
-                        }
-                    },
+                    "aggs": {"RESULTS": {"terms": {"field": "poller.salvo.salvo_mon.s_result", "size": 10}}},
                 }
             },
         }
@@ -276,14 +270,7 @@ class summary_builder:
         except Exception as e:
 
             with open("summary_builder", "a+") as f:
-                f.write(
-                    str(datetime.datetime.now())
-                    + " --- "
-                    + "magnum_cache_builder"
-                    + "\t"
-                    + str(e)
-                    + "\r\n"
-                )
+                f.write(str(datetime.datetime.now()) + " --- " + "magnum_cache_builder" + "\t" + str(e) + "\r\n")
 
             return None
 
@@ -312,9 +299,9 @@ class summary_builder:
                             # test if the issues top hits is in the edge object
                             if "ISSUES" in edge.keys():
 
-                                number_issues = edge["ISSUES"]["hits"]["hits"][-1]["fields"][
-                                    "poller.ipg.statusmon.i_num_issues"
-                                ][-1]
+                                number_issues = edge["ISSUES"]["hits"]["hits"][-1]["fields"]["poller.ipg.statusmon.i_num_issues"][
+                                    -1
+                                ]
 
                                 severity_code = edge["ISSUES"]["hits"]["hits"][-1]["fields"][
                                     "poller.ipg.statusmon.i_severity_code"
@@ -333,28 +320,17 @@ class summary_builder:
 
                                     if values["s_{}".format(group_key.lower())] == bucket_key:
 
-                                        values[
-                                            "i_{}_status_issues".format(group_key.lower())
-                                        ] += number_issues
+                                        values["i_{}_status_issues".format(group_key.lower())] += number_issues
 
                                         # Test if the document severity code is greater then the stored
                                         # severity. if greater then update the fields with the higher severity
-                                        if (
-                                            severity_code
-                                            > values["i_{}_status_code".format(group_key.lower())]
-                                        ):
+                                        if severity_code > values["i_{}_status_code".format(group_key.lower())]:
 
-                                            values[
-                                                "i_{}_status_code".format(group_key.lower())
-                                            ] = severity_code
+                                            values["i_{}_status_code".format(group_key.lower())] = severity_code
 
-                                            values[
-                                                "s_{}_status_descr".format(group_key.lower())
-                                            ] = severity_descr
+                                            values["s_{}_status_descr".format(group_key.lower())] = severity_descr
 
-                                            values[
-                                                "s_{}_status_color".format(group_key.lower())
-                                            ] = severity_color
+                                            values["s_{}_status_color".format(group_key.lower())] = severity_color
 
         return fields
 
@@ -385,26 +361,20 @@ class summary_builder:
                                 if "ISSUES" in link.keys():
 
                                     number_issues = len(
-                                        link["ISSUES"]["hits"]["hits"][-1]["fields"][
-                                            "poller.ipg.linkmon.as_fault_list"
-                                        ]
+                                        link["ISSUES"]["hits"]["hits"][-1]["fields"]["poller.ipg.linkmon.as_fault_list"]
                                     )
 
                                     for _, values in fields.items():
 
                                         if values["s_{}".format(group_key.lower())] == bucket_key:
 
-                                            values[
-                                                "i_{}_linkmon_issues".format(group_key.lower())
-                                            ] += number_issues
+                                            values["i_{}_linkmon_issues".format(group_key.lower())] += number_issues
 
         return fields
 
     def process_salvo(self, fields):
 
-        results = self.fetch(
-            "http://{}:9200/log-metric-poller-salvo-*/_search".format(self.insite), self.salvo_query
-        )
+        results = self.fetch("http://{}:9200/log-metric-poller-salvo-*/_search".format(self.insite), self.salvo_query)
 
         if isinstance(results, dict):
             if "aggregations" in results.keys():
@@ -416,9 +386,7 @@ class summary_builder:
                     for result in room["RESULTS"]["buckets"]:
 
                         if pcr in fields.keys():
-                            fields[pcr]["i_pcr_salvo_{}".format(result["key"])] += result[
-                                "doc_count"
-                            ]
+                            fields[pcr]["i_pcr_salvo_{}".format(result["key"])] += result["doc_count"]
 
     def process_magnum_status(self, fields):
 
@@ -467,16 +435,12 @@ class summary_builder:
 
                             if "description" in server.keys():
                                 for hit in server["description"]["hits"]["hits"]:
-                                    server_desc = hit["fields"]["poller.magnum.api.s_state_descr"][
-                                        -1
-                                    ]
+                                    server_desc = hit["fields"]["poller.magnum.api.s_state_descr"][-1]
 
                             for room, items in fields.items():
 
                                 if room in server_name:
-                                    items[
-                                        "s_pcr_magnum_{}_redundancy".format(server_key.lower())
-                                    ] = server_desc
+                                    items["s_pcr_magnum_{}_redundancy".format(server_key.lower())] = server_desc
 
     def process_summary(self):
 
