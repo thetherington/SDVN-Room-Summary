@@ -74,7 +74,7 @@ class summary_builder:
                                         "ISSUES": {
                                             "top_hits": {
                                                 "size": 1,
-                                                "docvalue_fields": ["ipg.linkmon.as_fault_list"],
+                                                "docvalue_fields": ["ipg.linkmon.i_num_issues"],
                                                 "_source": False,
                                                 "sort": [{"@timestamp": {"order": "desc"}}],
                                             }
@@ -356,7 +356,7 @@ class summary_builder:
 
                             try:
 
-                                number_issues = len(link["ISSUES"]["hits"]["hits"][-1]["fields"]["ipg.linkmon.as_fault_list"])
+                                number_issues = link["ISSUES"]["hits"]["hits"][-1]["fields"]["ipg.linkmon.i_num_issues"][-1]
 
                                 for _, values in fields.items():
 
